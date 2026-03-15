@@ -265,6 +265,46 @@ input[type="range"] {
   margin-top: 16px;
 }
 
+.mindfulness-panel {
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid #dfe9f7;
+  border-radius: var(--radius-md);
+  background: linear-gradient(180deg, #f7fbff 0%, #f2f7fb 100%);
+}
+
+.mindfulness-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mindfulness-status {
+  font-size: 24px;
+  line-height: 1.1;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: #174a7c;
+}
+
+.mindfulness-btn {
+  width: 100%;
+  height: 46px;
+  margin-top: 14px;
+  border: 1px solid #b6d3ef;
+  border-radius: 14px;
+  background: #ffffff;
+  color: #174a7c;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.mindfulness-btn.active {
+  background: #174a7c;
+  border-color: #174a7c;
+  color: #ffffff;
+}
+
 .quick-btn,
 .edit-btn,
 .time-box,

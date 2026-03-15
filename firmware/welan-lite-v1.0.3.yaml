@@ -75,6 +75,21 @@ globals:
     restore_value: true
     initial_value: '50'
 
+  - id: mindfulness_active
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
+  - id: mindfulness_peak_percent
+    type: int
+    restore_value: no
+    initial_value: '100'
+
+  - id: mindfulness_base_percent
+    type: int
+    restore_value: no
+    initial_value: '0'
+
 output:
   - platform: ledc
     id: pwm_output
@@ -106,6 +121,22 @@ script:
             call.set_brightness(brightness);
             call.perform();
           }
+
+  - id: apply_percent_brightness_transition
+    parameters:
+      percent: int
+      transition_ms: int
+    then:
+      - lambda: |-
+          int p = percent;
+          int t = transition_ms;
+          if (p < 0) p = 0;
+          if (p > 100) p = 100;
+          float brightness = float(p) / 100.0f;
+          auto call = id(aquarium_light).turn_on();
+          call.set_brightness(brightness);
+          call.set_transition_length(uint32_t(t));
+          call.perform();
 
   - id: sync_manual_brightness_from_light
     then:
@@ -197,11 +228,96 @@ script:
             id(manual_override_until_minute) = -1;
           }
 
+  - id: start_mindfulness
+    mode: restart
+    then:
+      - script.stop: mindfulness_cycle
+      - lambda: |-
+          id(mindfulness_peak_percent) = 100;
+          id(mindfulness_base_percent) = 0;
+          id(mindfulness_active) = true;
+          id(manual_override_active) = false;
+          id(manual_override_until_minute) = -1;
+          id(last_applied_percent) = -999;
+      - switch.template.publish:
+          id: mindfulness_mode
+          state: ON
+      - script.execute:
+          id: apply_percent_brightness_transition
+          percent: !lambda 'return id(mindfulness_base_percent);'
+          transition_ms: 0
+      - lambda: |-
+          id(brightness_percent).publish_state(id(mindfulness_base_percent));
+      - script.execute: mindfulness_cycle
+
+  - id: stop_mindfulness_resume
+    mode: restart
+    then:
+      - script.stop: mindfulness_cycle
+      - lambda: |-
+          id(mindfulness_active) = false;
+      - switch.template.publish:
+          id: mindfulness_mode
+          state: OFF
+      - lambda: |-
+          id(last_applied_percent) = -999;
+      - script.execute: evaluate_control
+
+  - id: stop_mindfulness_manual
+    mode: restart
+    then:
+      - script.stop: mindfulness_cycle
+      - lambda: |-
+          id(mindfulness_active) = false;
+      - switch.template.publish:
+          id: mindfulness_mode
+          state: OFF
+      - lambda: |-
+          id(last_applied_percent) = -999;
+
+  - id: mindfulness_cycle
+    mode: restart
+    then:
+      - repeat:
+          count: 75
+          then:
+            - if:
+                condition:
+                  lambda: 'return id(mindfulness_active);'
+                then:
+                  - script.execute:
+                      id: apply_percent_brightness_transition
+                      percent: !lambda 'return id(mindfulness_peak_percent);'
+                      transition_ms: 5000
+                  - lambda: |-
+                      id(brightness_percent).publish_state(id(mindfulness_peak_percent));
+                  - delay: 6s
+                  - if:
+                      condition:
+                        lambda: 'return id(mindfulness_active);'
+                      then:
+                        - script.execute:
+                            id: apply_percent_brightness_transition
+                            percent: !lambda 'return id(mindfulness_base_percent);'
+                            transition_ms: 5000
+                        - lambda: |-
+                            id(brightness_percent).publish_state(id(mindfulness_base_percent));
+                        - delay: 6s
+      - if:
+          condition:
+            lambda: 'return id(mindfulness_active);'
+          then:
+            - script.execute: stop_mindfulness_resume
+
   - id: evaluate_control
     then:
       - lambda: |-
           auto now = id(sntp_time).now();
           if (!now.is_valid()) return;
+
+          if (id(mindfulness_active)) {
+            return;
+          }
 
           int cur = now.hour * 60 + now.minute;
 
@@ -280,6 +396,11 @@ switch:
     lambda: |-
       return id(aquarium_light).current_values.is_on();
     turn_on_action:
+      - if:
+          condition:
+            lambda: 'return id(mindfulness_active);'
+          then:
+            - script.execute: stop_mindfulness_manual
       - lambda: |-
           int p = int(id(brightness_percent).state);
           if (p <= 0) {
@@ -292,6 +413,11 @@ switch:
           id(apply_percent_brightness)->execute(p);
       - script.execute: enter_manual_override
     turn_off_action:
+      - if:
+          condition:
+            lambda: 'return id(mindfulness_active);'
+          then:
+            - script.execute: stop_mindfulness_manual
       - lambda: |-
           int p = int(id(brightness_percent).state);
           if (p > 0) {
@@ -304,6 +430,18 @@ switch:
       - script.execute: enter_manual_override
     web_server:
       sorting_weight: 10
+
+  - platform: template
+    name: "ZEN 正念模式"
+    id: mindfulness_mode
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    turn_on_action:
+      - script.execute: start_mindfulness
+    turn_off_action:
+      - script.execute: stop_mindfulness_resume
+    web_server:
+      sorting_weight: 12
 
   - platform: template
     name: "T1 时段1启用"
@@ -371,6 +509,11 @@ number:
     web_server:
       sorting_weight: 11
     set_action:
+      - if:
+          condition:
+            lambda: 'return id(mindfulness_active);'
+          then:
+            - script.execute: stop_mindfulness_manual
       - lambda: |-
           int p = int(x);
           if (p > 0) {
@@ -663,6 +806,7 @@ text_sensor:
     web_server:
       sorting_weight: 92
     lambda: |-
+      if (id(mindfulness_active)) return {"正念呼吸中"};
       if (id(manual_override_active)) return {"手动临时覆盖中"};
       if (id(p1_enable).state || id(p2_enable).state || id(p3_enable).state) return {"定时待命/自动运行"};
       return {"纯手动模式"};
