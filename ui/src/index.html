@@ -13,7 +13,7 @@
         <div class="top-row">
           <div>
             <h1>Welan Lite</h1>
-            <p class="sub">本地控制面板</p>
+            <p class="sub">本地控制</p>
           </div>
           <div class="online-dot-wrap">
             <span class="online-dot"></span>
@@ -37,7 +37,7 @@
         <div class="section-head">
           <div>
             <h2>主控制</h2>
-            <p class="sub">快速开关与亮度调节</p>
+            <p class="sub">开关与亮度</p>
           </div>
           <button id="mainSwitch" class="switch on">
             <span>开</span>
@@ -66,13 +66,21 @@
             <button class="quick-btn" data-level="50">50%</button>
             <button class="quick-btn" data-level="100">100%</button>
           </div>
+
+          <div class="mindfulness-panel">
+            <div class="mindfulness-copy">
+              <div class="label">正念呼吸灯</div>
+              <div id="mindfulnessStatus" class="mindfulness-status">未开启</div>
+              <div class="sub">5-1-5-1 节奏，持续 15 分钟</div>
+            </div>
+            <button id="mindfulnessToggleBtn" class="mindfulness-btn" type="button">进入正念</button>
+          </div>
         </div>
       </section>
 
       <section class="timing-section">
         <div class="section-title">
           <h2>定时设置</h2>
-          <p class="sub">每个场景都可单独启用、设置时间与亮度</p>
         </div>
 
         <div class="period-list">
@@ -80,7 +88,7 @@
             <div class="period-top">
               <div>
                 <h3>场景一</h3>
-                <p class="sub">当前未生效</p>
+                <p class="sub">未生效</p>
               </div>
               <button id="scene1Switch" class="mini-switch on"><span>开</span></button>
             </div>
@@ -113,7 +121,7 @@
             <div class="period-top">
               <div>
                 <h3>场景二</h3>
-                <p class="sub">今日将自动生效</p>
+                <p class="sub">已启用</p>
               </div>
               <button id="scene2Switch" class="mini-switch on"><span>开</span></button>
             </div>
@@ -180,13 +188,13 @@
       <section class="card system-card">
         <div class="section-title no-margin">
           <h2>系统</h2>
-          <p class="sub">设备信息与维护操作</p>
+          <p class="sub">信息与维护</p>
         </div>
 
         <div class="sys-list">
           <div class="ota-panel">
             <div class="sys-title">本地升级固件</div>
-            <div class="sub">选择编译好的 .bin 文件，直接通过当前页面升级设备</div>
+            <div class="sub">选择 .bin 文件升级</div>
             <div class="ota-actions">
               <input id="otaFileInput" class="ota-file-input" type="file" accept=".bin,application/octet-stream" />
               <button id="otaUploadBtn" class="ota-upload-btn" type="button">上传固件</button>
@@ -200,7 +208,7 @@
           <button id="restartBtn" class="sys-item">
             <div>
               <div class="sys-title">重启设备</div>
-              <div class="sub">用于更新后重启或故障恢复</div>
+              <div class="sub">立即重启</div>
             </div>
             <span class="arrow">进入</span>
           </button>
@@ -208,7 +216,7 @@
           <button id="factoryResetBtn" class="sys-item danger">
             <div>
               <div class="sys-title danger-text">恢复出厂设置</div>
-              <div class="sub danger-sub">清除本地配置并重新开始</div>
+              <div class="sub danger-sub">清除本地配置</div>
             </div>
             <span class="arrow danger-sub">进入</span>
           </button>
@@ -223,7 +231,7 @@
       <div class="modal-head">
         <div>
           <div id="timeModalTitle" class="modal-title">设置时间</div>
-          <div class="modal-sub">请选择时间后点击确认</div>
+          <div class="modal-sub">选择后确认</div>
         </div>
         <button id="timeModalClose" class="modal-close" type="button">✕</button>
       </div>

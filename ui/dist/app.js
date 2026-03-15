@@ -2,6 +2,8 @@ const brightnessSlider = document.getElementById("brightnessSlider");
 const brightnessValue = document.getElementById("brightnessValue");
 const quickBtns = document.querySelectorAll(".quick-btn");
 const mainSwitch = document.getElementById("mainSwitch");
+const mindfulnessToggleBtn = document.getElementById("mindfulnessToggleBtn");
+const mindfulnessStatus = document.getElementById("mindfulnessStatus");
 
 // 场景开关
 const scene1Switch = document.getElementById("scene1Switch");
@@ -52,12 +54,16 @@ const otaStatusText = document.getElementById("otaStatusText");
 
 let isOn = true;
 let pendingTimeEdit = null;
+let mindfulnessOn = false;
 
 const API = {
   // 主控制
   mainSwitchOn: "/switch/MANUAL%201%20%E6%89%8B%E5%8A%A8%E6%80%BB%E5%BC%80%E5%85%B3/turn_on",
   mainSwitchOff: "/switch/MANUAL%201%20%E6%89%8B%E5%8A%A8%E6%80%BB%E5%BC%80%E5%85%B3/turn_off",
   mainSwitchGet: "/switch/MANUAL%201%20%E6%89%8B%E5%8A%A8%E6%80%BB%E5%BC%80%E5%85%B3",
+  mindfulnessGet: "/switch/ZEN%20%E6%AD%A3%E5%BF%B5%E6%A8%A1%E5%BC%8F",
+  mindfulnessOn: "/switch/ZEN%20%E6%AD%A3%E5%BF%B5%E6%A8%A1%E5%BC%8F/turn_on",
+  mindfulnessOff: "/switch/ZEN%20%E6%AD%A3%E5%BF%B5%E6%A8%A1%E5%BC%8F/turn_off",
 
   mainBrightnessGet: "/number/BRT%20%E5%BD%93%E5%89%8D%E4%BA%AE%E5%BA%A6",
   mainBrightnessSet: (value) =>
@@ -306,6 +312,19 @@ function renderSwitchState(on) {
   if (span) span.textContent = isOn ? "开" : "关";
 }
 
+function renderMindfulnessState(on) {
+  mindfulnessOn = !!on;
+
+  if (mindfulnessStatus) {
+    mindfulnessStatus.textContent = mindfulnessOn ? "进行中" : "未开启";
+  }
+
+  if (mindfulnessToggleBtn) {
+    mindfulnessToggleBtn.classList.toggle("active", mindfulnessOn);
+    mindfulnessToggleBtn.textContent = mindfulnessOn ? "退出正念" : "进入正念";
+  }
+}
+
 function renderBrightness(value) {
   const num = Math.max(0, Math.min(100, Number(value) || 0));
 
@@ -390,6 +409,11 @@ async function turnLightRemote(on) {
   }
 }
 
+async function setMindfulnessRemote(on) {
+  await post(on ? API.mindfulnessOn : API.mindfulnessOff);
+  renderMindfulnessState(on);
+}
+
 async function setSceneEnable(sceneNo, on) {
   const map = {
     1: on ? API.scene1EnableOn : API.scene1EnableOff,
@@ -463,6 +487,11 @@ function handleEventData(data) {
   // 主开关
   if (data.name_id === "switch/MANUAL 1 手动总开关") {
     renderSwitchState(parseBool(data));
+    return;
+  }
+
+  if (data.name_id === "switch/ZEN 正念模式") {
+    renderMindfulnessState(parseBool(data));
     return;
   }
 
@@ -589,6 +618,7 @@ if (timeModal) {
 async function loadInitialState() {
   const requests = [
     API.mainSwitchGet,
+    API.mindfulnessGet,
     API.mainBrightnessGet,
 
     API.scene1EnableGet,
@@ -852,6 +882,16 @@ if (factoryResetBtn) {
     } catch (err) {
       console.error("恢复出厂设置失败:", err);
       alert("恢复出厂设置失败，请查看控制台日志。");
+    }
+  });
+}
+
+if (mindfulnessToggleBtn) {
+  mindfulnessToggleBtn.addEventListener("click", async () => {
+    try {
+      await setMindfulnessRemote(!mindfulnessOn);
+    } catch (err) {
+      console.error("切换正念模式失败:", err);
     }
   });
 }
