@@ -1,0 +1,681 @@
+substitutions:
+  device_name: welan-lite
+  friendly_name: "微澜 Lite"
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+  comment: "Welan Lite v1.1.1"
+
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [web_assets]
+
+esp32:
+  board: esp32-c3-devkitm-1
+  framework:
+    type: arduino
+
+logger:
+  level: INFO
+
+api:
+
+ota:
+  - platform: esphome
+
+preferences:
+  flash_write_interval: 1min
+
+wifi:
+  power_save_mode: none
+  reboot_timeout: 15min
+  ap:
+    ssid: "Welan-Lite-Setup"
+    password: "12345678"
+
+captive_portal:
+
+improv_serial:
+
+web_server:
+  port: 80
+  version: 3
+
+web_assets:
+  index_html: assets/index.html.gz
+  app_css: assets/app.css.gz
+  app_js: assets/app.js.gz
+
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: Asia/Shanghai
+
+globals:
+  - id: manual_override_active
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
+  - id: manual_override_until_minute
+    type: int
+    restore_value: no
+    initial_value: '-1'
+
+  - id: last_applied_percent
+    type: int
+    restore_value: no
+    initial_value: '-999'
+
+  - id: last_nonzero_brightness
+    type: int
+    restore_value: true
+    initial_value: '50'
+
+output:
+  - platform: ledc
+    id: pwm_output
+    pin: GPIO10
+    frequency: 1220Hz
+
+light:
+  - platform: monochromatic
+    id: aquarium_light
+    internal: true
+    output: pwm_output
+    default_transition_length: 500ms
+    restore_mode: RESTORE_DEFAULT_OFF
+
+script:
+  - id: apply_percent_brightness
+    parameters:
+      percent: int
+    then:
+      - lambda: |-
+          int p = percent;
+          if (p <= 0) {
+            auto call = id(aquarium_light).turn_off();
+            call.perform();
+          } else {
+            float mapped = 44.0f + (float(p - 1) * 211.0f / 99.0f);
+            float brightness = mapped / 255.0f;
+            auto call = id(aquarium_light).turn_on();
+            call.set_brightness(brightness);
+            call.perform();
+          }
+
+  - id: sync_manual_brightness_from_light
+    then:
+      - lambda: |-
+          if (!id(aquarium_light).current_values.is_on()) {
+            id(brightness_percent).publish_state(0);
+            return;
+          }
+
+          float b = id(aquarium_light).current_values.get_brightness();
+          int raw = int(roundf(b * 255.0f));
+          int p = 1;
+
+          if (raw <= 44) {
+            p = 1;
+          } else {
+            p = int(roundf((raw - 44) * 99.0f / 211.0f)) + 1;
+          }
+
+          if (p < 1) p = 1;
+          if (p > 100) p = 100;
+          id(brightness_percent).publish_state(p);
+
+  - id: clear_manual_override
+    then:
+      - lambda: |-
+          id(manual_override_active) = false;
+          id(manual_override_until_minute) = -1;
+
+  - id: enter_manual_override
+    then:
+      - lambda: |-
+          auto now = id(sntp_time).now();
+          if (!now.is_valid()) return;
+
+          int cur = now.hour * 60 + now.minute;
+          int next_boundary = -1;
+
+          auto consider_boundary = [&](int minute_of_day) {
+            if (minute_of_day > cur) {
+              if (next_boundary < 0 || minute_of_day < next_boundary) {
+                next_boundary = minute_of_day;
+              }
+            }
+          };
+
+          if (id(p1_enable).state) {
+            consider_boundary(int(id(p1_on_h).state) * 60 + int(id(p1_on_m).state));
+            consider_boundary(int(id(p1_off_h).state) * 60 + int(id(p1_off_m).state));
+          }
+          if (id(p2_enable).state) {
+            consider_boundary(int(id(p2_on_h).state) * 60 + int(id(p2_on_m).state));
+            consider_boundary(int(id(p2_off_h).state) * 60 + int(id(p2_off_m).state));
+          }
+          if (id(p3_enable).state) {
+            consider_boundary(int(id(p3_on_h).state) * 60 + int(id(p3_on_m).state));
+            consider_boundary(int(id(p3_off_h).state) * 60 + int(id(p3_off_m).state));
+          }
+
+          if (next_boundary < 0) {
+            int earliest = -1;
+            auto consider_earliest = [&](int minute_of_day) {
+              if (earliest < 0 || minute_of_day < earliest) {
+                earliest = minute_of_day;
+              }
+            };
+
+            if (id(p1_enable).state) {
+              consider_earliest(int(id(p1_on_h).state) * 60 + int(id(p1_on_m).state));
+              consider_earliest(int(id(p1_off_h).state) * 60 + int(id(p1_off_m).state));
+            }
+            if (id(p2_enable).state) {
+              consider_earliest(int(id(p2_on_h).state) * 60 + int(id(p2_on_m).state));
+              consider_earliest(int(id(p2_off_h).state) * 60 + int(id(p2_off_m).state));
+            }
+            if (id(p3_enable).state) {
+              consider_earliest(int(id(p3_on_h).state) * 60 + int(id(p3_on_m).state));
+              consider_earliest(int(id(p3_off_h).state) * 60 + int(id(p3_off_m).state));
+            }
+
+            next_boundary = earliest;
+          }
+
+          if (next_boundary >= 0) {
+            id(manual_override_active) = true;
+            id(manual_override_until_minute) = next_boundary;
+          } else {
+            id(manual_override_active) = false;
+            id(manual_override_until_minute) = -1;
+          }
+
+  - id: evaluate_control
+    then:
+      - lambda: |-
+          auto now = id(sntp_time).now();
+          if (!now.is_valid()) return;
+
+          int cur = now.hour * 60 + now.minute;
+
+          if (id(manual_override_active)) {
+            if (cur == id(manual_override_until_minute)) {
+              id(manual_override_active) = false;
+              id(manual_override_until_minute) = -1;
+            } else {
+              return;
+            }
+          }
+
+          int target = 0;
+
+          auto in_period = [&](int start_m, int end_m) -> bool {
+            if (start_m == end_m) return false;
+            if (start_m < end_m) {
+              return cur >= start_m && cur < end_m;
+            } else {
+              return cur >= start_m || cur < end_m;
+            }
+          };
+
+          if (id(p1_enable).state) {
+            int start_m = int(id(p1_on_h).state) * 60 + int(id(p1_on_m).state);
+            int end_m   = int(id(p1_off_h).state) * 60 + int(id(p1_off_m).state);
+            if (in_period(start_m, end_m)) {
+              target = int(id(p1_bright).state);
+            }
+          }
+
+          if (id(p2_enable).state) {
+            int start_m = int(id(p2_on_h).state) * 60 + int(id(p2_on_m).state);
+            int end_m   = int(id(p2_off_h).state) * 60 + int(id(p2_off_m).state);
+            if (in_period(start_m, end_m)) {
+              target = int(id(p2_bright).state);
+            }
+          }
+
+          if (id(p3_enable).state) {
+            int start_m = int(id(p3_on_h).state) * 60 + int(id(p3_on_m).state);
+            int end_m   = int(id(p3_off_h).state) * 60 + int(id(p3_off_m).state);
+            if (in_period(start_m, end_m)) {
+              target = int(id(p3_bright).state);
+            }
+          }
+
+          if (target != id(last_applied_percent)) {
+            id(last_applied_percent) = target;
+
+            if (target <= 0) {
+              auto off_call = id(aquarium_light).turn_off();
+              off_call.perform();
+              id(brightness_percent).publish_state(0);
+            } else {
+              id(apply_percent_brightness)->execute(target);
+              id(brightness_percent).publish_state(target);
+            }
+          }
+
+interval:
+  - interval: 10s
+    then:
+      - script.execute: evaluate_control
+
+sensor:
+  - platform: wifi_signal
+    id: wifi_signal_dbm
+    update_interval: 10s
+    internal: true
+
+switch:
+  - platform: template
+    name: "MANUAL 1 手动总开关"
+    id: light_switch
+    lambda: |-
+      return id(aquarium_light).current_values.is_on();
+    turn_on_action:
+      - lambda: |-
+          int p = int(id(brightness_percent).state);
+          if (p <= 0) {
+            p = id(last_nonzero_brightness);
+          }
+          if (p <= 0) {
+            p = 30;
+          }
+          id(brightness_percent).publish_state(p);
+          id(apply_percent_brightness)->execute(p);
+      - script.execute: enter_manual_override
+    turn_off_action:
+      - lambda: |-
+          int p = int(id(brightness_percent).state);
+          if (p > 0) {
+            id(last_nonzero_brightness) = p;
+          }
+      - light.turn_off: aquarium_light
+      - number.set:
+          id: brightness_percent
+          value: 0
+      - script.execute: enter_manual_override
+    web_server:
+      sorting_weight: 10
+
+  - platform: template
+    name: "T1 时段1启用"
+    id: p1_enable
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    turn_on_action:
+      - lambda: |-
+          id(last_applied_percent) = -999;
+      - script.execute: clear_manual_override
+      - script.execute: evaluate_control
+    turn_off_action:
+      - lambda: |-
+          id(last_applied_percent) = -999;
+      - script.execute: clear_manual_override
+      - script.execute: evaluate_control
+    web_server:
+      sorting_weight: 20
+
+  - platform: template
+    name: "T2 时段2启用"
+    id: p2_enable
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    turn_on_action:
+      - lambda: |-
+          id(last_applied_percent) = -999;
+      - script.execute: clear_manual_override
+      - script.execute: evaluate_control
+    turn_off_action:
+      - lambda: |-
+          id(last_applied_percent) = -999;
+      - script.execute: clear_manual_override
+      - script.execute: evaluate_control
+    web_server:
+      sorting_weight: 30
+
+  - platform: template
+    name: "T3 时段3启用"
+    id: p3_enable
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    turn_on_action:
+      - lambda: |-
+          id(last_applied_percent) = -999;
+      - script.execute: clear_manual_override
+      - script.execute: evaluate_control
+    turn_off_action:
+      - lambda: |-
+          id(last_applied_percent) = -999;
+      - script.execute: clear_manual_override
+      - script.execute: evaluate_control
+    web_server:
+      sorting_weight: 40
+
+number:
+  - platform: template
+    name: "BRT 当前亮度"
+    id: brightness_percent
+    min_value: 0
+    max_value: 100
+    step: 1
+    restore_value: true
+    optimistic: true
+    web_server:
+      sorting_weight: 11
+    set_action:
+      - lambda: |-
+          int p = int(x);
+          if (p > 0) {
+            id(last_nonzero_brightness) = p;
+          }
+          id(apply_percent_brightness)->execute(p);
+      - script.execute: enter_manual_override
+
+  - platform: template
+    name: "T1 ON H"
+    id: p1_on_h
+    min_value: 0
+    max_value: 23
+    step: 1
+    restore_value: true
+    optimistic: true
+    initial_value: 8
+    web_server:
+      sorting_weight: 21
+    set_action:
+      - lambda: |-
+          id(last_applied_percent) = -999;
+      - script.execute: clear_manual_override
+      - script.execute: evaluate_control
+
+  - platform: template
+    name: "T1 ON M"
+    id: p1_on_m
+    min_value: 0
+    max_value: 59
+    step: 1
+    restore_value: true
+    optimistic: true
+    initial_value: 0
+    web_server:
+      sorting_weight: 22
+    set_action:
+      - lambda: |-
+          id(last_applied_percent) = -999;
+      - script.execute: clear_manual_override
+      - script.execute: evaluate_control
+
+  - platform: template
+    name: "T1 OFF H"
+    id: p1_off_h
+    min_value: 0
+    max_value: 23
+    step: 1
+    restore_value: true
+    optimistic: true
+    initial_value: 12
+    web_server:
+      sorting_weight: 23
+    set_action:
+      - lambda: |-
+          id(last_applied_percent) = -999;
+      - script.execute: clear_manual_override
+      - script.execute: evaluate_control
+
+  - platform: template
+    name: "T1 OFF M"
+    id: p1_off_m
+    min_value: 0
+    max_value: 59
+    step: 1
+    restore_value: true
+    optimistic: true
+    initial_value: 0
+    web_server:
+      sorting_weight: 24
+    set_action:
+      - lambda: |-
+          id(last_applied_percent) = -999;
+      - script.execute: clear_manual_override
+      - script.execute: evaluate_control
+
+  - platform: template
+    name: "T1 BRT"
+    id: p1_bright
+    min_value: 1
+    max_value: 100
+    step: 1
+    restore_value: true
+    optimistic: true
+    initial_value: 50
+    web_server:
+      sorting_weight: 25
+    set_action:
+      - lambda: |-
+          id(last_applied_percent) = -999;
+      - script.execute: clear_manual_override
+      - script.execute: evaluate_control
+
+  - platform: template
+    name: "T2 ON H"
+    id: p2_on_h
+    min_value: 0
+    max_value: 23
+    step: 1
+    restore_value: true
+    optimistic: true
+    initial_value: 14
+    web_server:
+      sorting_weight: 31
+    set_action:
+      - lambda: |-
+          id(last_applied_percent) = -999;
+      - script.execute: clear_manual_override
+      - script.execute: evaluate_control
+
+  - platform: template
+    name: "T2 ON M"
+    id: p2_on_m
+    min_value: 0
+    max_value: 59
+    step: 1
+    restore_value: true
+    optimistic: true
+    initial_value: 0
+    web_server:
+      sorting_weight: 32
+    set_action:
+      - lambda: |-
+          id(last_applied_percent) = -999;
+      - script.execute: clear_manual_override
+      - script.execute: evaluate_control
+
+  - platform: template
+    name: "T2 OFF H"
+    id: p2_off_h
+    min_value: 0
+    max_value: 23
+    step: 1
+    restore_value: true
+    optimistic: true
+    initial_value: 18
+    web_server:
+      sorting_weight: 33
+    set_action:
+      - lambda: |-
+          id(last_applied_percent) = -999;
+      - script.execute: clear_manual_override
+      - script.execute: evaluate_control
+
+  - platform: template
+    name: "T2 OFF M"
+    id: p2_off_m
+    min_value: 0
+    max_value: 59
+    step: 1
+    restore_value: true
+    optimistic: true
+    initial_value: 0
+    web_server:
+      sorting_weight: 34
+    set_action:
+      - lambda: |-
+          id(last_applied_percent) = -999;
+      - script.execute: clear_manual_override
+      - script.execute: evaluate_control
+
+  - platform: template
+    name: "T2 BRT"
+    id: p2_bright
+    min_value: 1
+    max_value: 100
+    step: 1
+    restore_value: true
+    optimistic: true
+    initial_value: 50
+    web_server:
+      sorting_weight: 35
+    set_action:
+      - lambda: |-
+          id(last_applied_percent) = -999;
+      - script.execute: clear_manual_override
+      - script.execute: evaluate_control
+
+  - platform: template
+    name: "T3 ON H"
+    id: p3_on_h
+    min_value: 0
+    max_value: 23
+    step: 1
+    restore_value: true
+    optimistic: true
+    initial_value: 19
+    web_server:
+      sorting_weight: 41
+    set_action:
+      - lambda: |-
+          id(last_applied_percent) = -999;
+      - script.execute: clear_manual_override
+      - script.execute: evaluate_control
+
+  - platform: template
+    name: "T3 ON M"
+    id: p3_on_m
+    min_value: 0
+    max_value: 59
+    step: 1
+    restore_value: true
+    optimistic: true
+    initial_value: 0
+    web_server:
+      sorting_weight: 42
+    set_action:
+      - lambda: |-
+          id(last_applied_percent) = -999;
+      - script.execute: clear_manual_override
+      - script.execute: evaluate_control
+
+  - platform: template
+    name: "T3 OFF H"
+    id: p3_off_h
+    min_value: 0
+    max_value: 23
+    step: 1
+    restore_value: true
+    optimistic: true
+    initial_value: 22
+    web_server:
+      sorting_weight: 43
+    set_action:
+      - lambda: |-
+          id(last_applied_percent) = -999;
+      - script.execute: clear_manual_override
+      - script.execute: evaluate_control
+
+  - platform: template
+    name: "T3 OFF M"
+    id: p3_off_m
+    min_value: 0
+    max_value: 59
+    step: 1
+    restore_value: true
+    optimistic: true
+    initial_value: 0
+    web_server:
+      sorting_weight: 44
+    set_action:
+      - lambda: |-
+          id(last_applied_percent) = -999;
+      - script.execute: clear_manual_override
+      - script.execute: evaluate_control
+
+  - platform: template
+    name: "T3 BRT"
+    id: p3_bright
+    min_value: 1
+    max_value: 100
+    step: 1
+    restore_value: true
+    optimistic: true
+    initial_value: 50
+    web_server:
+      sorting_weight: 45
+    set_action:
+      - lambda: |-
+          id(last_applied_percent) = -999;
+      - script.execute: clear_manual_override
+      - script.execute: evaluate_control
+
+text_sensor:
+  - platform: template
+    name: "SYS WiFi信号强度"
+    update_interval: 10s
+    web_server:
+      sorting_weight: 90
+    lambda: |-
+      if (!id(wifi_signal_dbm).has_state()) return {"检测中..."};
+      float rssi = id(wifi_signal_dbm).state;
+      if (rssi >= -55) return {"极好"};
+      if (rssi >= -67) return {"较好"};
+      if (rssi >= -75) return {"一般"};
+      if (rssi >= -85) return {"较差"};
+      return {"差"};
+
+  - platform: template
+    name: "SYS 配网说明"
+    update_interval: 60s
+    web_server:
+      sorting_weight: 91
+    lambda: |-
+      return {"连接热点“Welan-Lite-Setup”配网。设备会自动进入搬家重新配网模式。"};
+
+  - platform: template
+    name: "SYS 当前控制状态"
+    update_interval: 5s
+    web_server:
+      sorting_weight: 92
+    lambda: |-
+      if (id(manual_override_active)) return {"手动临时覆盖中"};
+      if (id(p1_enable).state || id(p2_enable).state || id(p3_enable).state) return {"定时待命/自动运行"};
+      return {"纯手动模式"};
+
+button:
+  - platform: restart
+    name: "SYS 重启设备"
+    entity_category: config
+    web_server:
+      sorting_weight: 98
+
+  - platform: factory_reset
+    name: "SYS 恢复出厂设置"
+    entity_category: config
+    web_server:
+      sorting_weight: 99

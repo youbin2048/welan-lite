@@ -1,0 +1,7 @@
+services:
+  welan-lite-ui:
+    build: .
+    container_name: welan-lite-ui
+    ports:
+      - "3008:80"
+    restart: unless-stopped
