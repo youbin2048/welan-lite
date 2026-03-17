@@ -1,5 +1,7 @@
 substitutions:
   device_name: welan-lite
+  rf433_rx_pin: GPIO3
+  rf433_tx_pair_pin: GPIO1
   friendly_name: "微澜 Lite"
 
 esphome:
@@ -20,6 +22,46 @@ esp32:
 
 logger:
   level: INFO
+
+uart:
+  id: rf433_uart
+  baud_rate: 9600
+  rx_pin: ${rf433_rx_pin}
+  data_bits: 8
+  parity: NONE
+  stop_bits: 1
+  debug:
+    direction: RX
+    dummy_receiver: true
+    after:
+      delimiter: "\n"
+    sequence:
+      - lambda: |-
+          std::string line(bytes.begin(), bytes.end());
+          while (!line.empty() && (line.back() == '\r' || line.back() == '\n' || line.back() == ' ' || line.back() == '\t')) {
+            line.pop_back();
+          }
+
+          id(rf433_uart_frame_count)++;
+          id(rf433_last_uart_line) = line;
+          id(rf433_last_uart_ms) = millis();
+
+          if (line.rfind("LC:", 0) != 0) {
+            ESP_LOGD("rf433_uart", "Ignored non-LC frame: %s", line.c_str());
+            return;
+          }
+
+          if (!id(rf433_trigger_armed)) {
+            ESP_LOGD("rf433_uart", "Ignored frame while burst lock is active: %s", line.c_str());
+            return;
+          }
+
+          const uint32_t now = millis();
+          id(last_rf433_press_ms) = now;
+          id(rf433_trigger_armed) = false;
+          id(rf433_uart_accept_count)++;
+          ESP_LOGI("rf433_uart", "Accepted frame: %s", line.c_str());
+          id(rf433_toggle_manual_switch)->execute();
 
 api:
 
@@ -75,11 +117,61 @@ globals:
     restore_value: true
     initial_value: '50'
 
+  - id: mindfulness_active
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
+  - id: mindfulness_peak_percent
+    type: int
+    restore_value: no
+    initial_value: '100'
+
+  - id: mindfulness_base_percent
+    type: int
+    restore_value: no
+    initial_value: '0'
+
+  - id: last_rf433_press_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+
+  - id: rf433_uart_frame_count
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+
+  - id: rf433_uart_accept_count
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+
+  - id: rf433_last_uart_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+
+  - id: rf433_last_uart_line
+    type: std::string
+    restore_value: no
+    initial_value: '""'
+
+  - id: rf433_trigger_armed
+    type: bool
+    restore_value: no
+    initial_value: 'true'
+
 output:
   - platform: ledc
     id: pwm_output
     pin: GPIO10
     frequency: 1220Hz
+
+  - platform: gpio
+    id: rf433_pair_output
+    pin:
+      number: ${rf433_tx_pair_pin}
 
 light:
   - platform: monochromatic
@@ -104,6 +196,29 @@ script:
             float brightness = mapped / 255.0f;
             auto call = id(aquarium_light).turn_on();
             call.set_brightness(brightness);
+            call.perform();
+          }
+
+  - id: apply_percent_brightness_transition
+    parameters:
+      percent: int
+      transition_ms: int
+    then:
+      - lambda: |-
+          int p = percent;
+          int t = transition_ms;
+          if (p < 0) p = 0;
+          if (p > 100) p = 100;
+          if (p <= 0) {
+            auto call = id(aquarium_light).turn_off();
+            call.set_transition_length(uint32_t(t));
+            call.perform();
+          } else {
+            float mapped = 44.0f + (float(p - 1) * 211.0f / 99.0f);
+            float brightness = mapped / 255.0f;
+            auto call = id(aquarium_light).turn_on();
+            call.set_brightness(brightness);
+            call.set_transition_length(uint32_t(t));
             call.perform();
           }
 
@@ -197,11 +312,96 @@ script:
             id(manual_override_until_minute) = -1;
           }
 
+  - id: start_mindfulness
+    mode: restart
+    then:
+      - script.stop: mindfulness_cycle
+      - lambda: |-
+          id(mindfulness_peak_percent) = 100;
+          id(mindfulness_base_percent) = 0;
+          id(mindfulness_active) = true;
+          id(manual_override_active) = false;
+          id(manual_override_until_minute) = -1;
+          id(last_applied_percent) = -999;
+      - switch.template.publish:
+          id: mindfulness_mode
+          state: ON
+      - script.execute:
+          id: apply_percent_brightness_transition
+          percent: !lambda 'return id(mindfulness_base_percent);'
+          transition_ms: 0
+      - lambda: |-
+          id(brightness_percent).publish_state(id(mindfulness_base_percent));
+      - script.execute: mindfulness_cycle
+
+  - id: stop_mindfulness_resume
+    mode: restart
+    then:
+      - script.stop: mindfulness_cycle
+      - lambda: |-
+          id(mindfulness_active) = false;
+      - switch.template.publish:
+          id: mindfulness_mode
+          state: OFF
+      - lambda: |-
+          id(last_applied_percent) = -999;
+      - script.execute: evaluate_control
+
+  - id: stop_mindfulness_manual
+    mode: restart
+    then:
+      - script.stop: mindfulness_cycle
+      - lambda: |-
+          id(mindfulness_active) = false;
+      - switch.template.publish:
+          id: mindfulness_mode
+          state: OFF
+      - lambda: |-
+          id(last_applied_percent) = -999;
+
+  - id: mindfulness_cycle
+    mode: restart
+    then:
+      - repeat:
+          count: 75
+          then:
+            - if:
+                condition:
+                  lambda: 'return id(mindfulness_active);'
+                then:
+                  - script.execute:
+                      id: apply_percent_brightness_transition
+                      percent: !lambda 'return id(mindfulness_peak_percent);'
+                      transition_ms: 5000
+                  - lambda: |-
+                      id(brightness_percent).publish_state(id(mindfulness_peak_percent));
+                  - delay: 6s
+                  - if:
+                      condition:
+                        lambda: 'return id(mindfulness_active);'
+                      then:
+                        - script.execute:
+                            id: apply_percent_brightness_transition
+                            percent: !lambda 'return id(mindfulness_base_percent);'
+                            transition_ms: 5000
+                        - lambda: |-
+                            id(brightness_percent).publish_state(id(mindfulness_base_percent));
+                        - delay: 5s
+      - if:
+          condition:
+            lambda: 'return id(mindfulness_active);'
+          then:
+            - script.execute: stop_mindfulness_resume
+
   - id: evaluate_control
     then:
       - lambda: |-
           auto now = id(sntp_time).now();
           if (!now.is_valid()) return;
+
+          if (id(mindfulness_active)) {
+            return;
+          }
 
           int cur = now.hour * 60 + now.minute;
 
@@ -262,10 +462,40 @@ script:
             }
           }
 
+  - id: rf433_toggle_manual_switch
+    then:
+      - if:
+          condition:
+            switch.is_on: light_switch
+          then:
+            - switch.turn_off: light_switch
+          else:
+            - switch.turn_on: light_switch
+
+  - id: rf433_enter_pairing_mode
+    then:
+      - output.turn_on: rf433_pair_output
+      - delay: 90ms
+      - output.turn_off: rf433_pair_output
+      - delay: 140ms
+      - output.turn_on: rf433_pair_output
+      - delay: 90ms
+      - output.turn_off: rf433_pair_output
+      - logger.log: "433 pairing pulse sequence sent"
+
 interval:
   - interval: 10s
     then:
       - script.execute: evaluate_control
+
+  - interval: 50ms
+    then:
+      - lambda: |-
+          const uint32_t now = millis();
+          if (!id(rf433_trigger_armed) && (now - id(rf433_last_uart_ms) > 350)) {
+            id(rf433_trigger_armed) = true;
+            ESP_LOGD("rf433_uart", "Burst lock released after quiet gap");
+          }
 
 sensor:
   - platform: wifi_signal
@@ -280,6 +510,11 @@ switch:
     lambda: |-
       return id(aquarium_light).current_values.is_on();
     turn_on_action:
+      - if:
+          condition:
+            lambda: 'return id(mindfulness_active);'
+          then:
+            - script.execute: stop_mindfulness_manual
       - lambda: |-
           int p = int(id(brightness_percent).state);
           if (p <= 0) {
@@ -292,6 +527,11 @@ switch:
           id(apply_percent_brightness)->execute(p);
       - script.execute: enter_manual_override
     turn_off_action:
+      - if:
+          condition:
+            lambda: 'return id(mindfulness_active);'
+          then:
+            - script.execute: stop_mindfulness_manual
       - lambda: |-
           int p = int(id(brightness_percent).state);
           if (p > 0) {
@@ -304,6 +544,18 @@ switch:
       - script.execute: enter_manual_override
     web_server:
       sorting_weight: 10
+
+  - platform: template
+    name: "ZEN 姝ｅ康妯″紡"
+    id: mindfulness_mode
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    turn_on_action:
+      - script.execute: start_mindfulness
+    turn_off_action:
+      - script.execute: stop_mindfulness_resume
+    web_server:
+      sorting_weight: 12
 
   - platform: template
     name: "T1 时段1启用"
@@ -371,6 +623,11 @@ number:
     web_server:
       sorting_weight: 11
     set_action:
+      - if:
+          condition:
+            lambda: 'return id(mindfulness_active);'
+          then:
+            - script.execute: stop_mindfulness_manual
       - lambda: |-
           int p = int(x);
           if (p > 0) {
@@ -663,11 +920,49 @@ text_sensor:
     web_server:
       sorting_weight: 92
     lambda: |-
+      if (id(mindfulness_active)) return {"正念呼吸中"};
       if (id(manual_override_active)) return {"手动临时覆盖中"};
       if (id(p1_enable).state || id(p2_enable).state || id(p3_enable).state) return {"定时待命/自动运行"};
       return {"纯手动模式"};
 
+  - platform: template
+    name: "RF 调试"
+    update_interval: 1s
+    web_server:
+      sorting_weight: 93
+    lambda: |-
+      char buffer[160];
+      snprintf(buffer, sizeof(buffer), "UART A:%s RX:%lu OK:%lu LAST:%lums %s",
+               id(rf433_trigger_armed) ? "Y" : "N",
+               static_cast<unsigned long>(id(rf433_uart_frame_count)),
+               static_cast<unsigned long>(id(rf433_uart_accept_count)),
+               static_cast<unsigned long>(id(last_rf433_press_ms)),
+               id(rf433_last_uart_line).c_str());
+      return {buffer};
+
 button:
+  - platform: template
+    name: "ZEN 进入正念"
+    id: zen_start_button
+    internal: true
+    on_press:
+      - script.execute: start_mindfulness
+
+  - platform: template
+    name: "ZEN 退出正念"
+    id: zen_stop_button
+    internal: true
+    on_press:
+      - script.execute: stop_mindfulness_resume
+
+  - platform: template
+    name: "无线遥控重新对频"
+    id: rf433_pair_button
+    web_server:
+      sorting_weight: 97
+    on_press:
+      - script.execute: rf433_enter_pairing_mode
+
   - platform: restart
     name: "SYS 重启设备"
     entity_category: config

@@ -2,6 +2,8 @@ const brightnessSlider = document.getElementById("brightnessSlider");
 const brightnessValue = document.getElementById("brightnessValue");
 const quickBtns = document.querySelectorAll(".quick-btn");
 const mainSwitch = document.getElementById("mainSwitch");
+const mindfulnessToggleBtn = document.getElementById("mindfulnessToggleBtn");
+const mindfulnessStatus = document.getElementById("mindfulnessStatus");
 
 // 场景开关
 const scene1Switch = document.getElementById("scene1Switch");
@@ -44,6 +46,7 @@ const timeInput = document.getElementById("timeInput");
 
 // 系统任务
 const restartBtn = document.getElementById("restartBtn");
+const rfPairBtn = document.getElementById("rfPairBtn");
 const factoryResetBtn = document.getElementById("factoryResetBtn");
 const otaFileInput = document.getElementById("otaFileInput");
 const otaUploadBtn = document.getElementById("otaUploadBtn");
@@ -52,12 +55,16 @@ const otaStatusText = document.getElementById("otaStatusText");
 
 let isOn = true;
 let pendingTimeEdit = null;
+let mindfulnessOn = false;
 
 const API = {
   // 主控制
   mainSwitchOn: "/switch/MANUAL%201%20%E6%89%8B%E5%8A%A8%E6%80%BB%E5%BC%80%E5%85%B3/turn_on",
   mainSwitchOff: "/switch/MANUAL%201%20%E6%89%8B%E5%8A%A8%E6%80%BB%E5%BC%80%E5%85%B3/turn_off",
   mainSwitchGet: "/switch/MANUAL%201%20%E6%89%8B%E5%8A%A8%E6%80%BB%E5%BC%80%E5%85%B3",
+  mindfulnessGet: "/switch/ZEN%20%E6%AD%A3%E5%BF%B5%E6%A8%A1%E5%BC%8F",
+  mindfulnessOn: "/button/ZEN%20%E8%BF%9B%E5%85%A5%E6%AD%A3%E5%BF%B5/press",
+  mindfulnessOff: "/button/ZEN%20%E9%80%80%E5%87%BA%E6%AD%A3%E5%BF%B5/press",
 
   mainBrightnessGet: "/number/BRT%20%E5%BD%93%E5%89%8D%E4%BA%AE%E5%BA%A6",
   mainBrightnessSet: (value) =>
@@ -124,6 +131,7 @@ const API = {
     `/number/T3%20OFF%20M/set?value=${encodeURIComponent(value)}`,
   
   //系统任务
+  rfPair: "/button/%E6%97%A0%E7%BA%BF%E9%81%A5%E6%8E%A7%E9%87%8D%E6%96%B0%E5%AF%B9%E9%A2%91/press",
   restart: "/button/SYS%20%E9%87%8D%E5%90%AF%E8%AE%BE%E5%A4%87/press",
   factoryReset: "/button/SYS%20%E6%81%A2%E5%A4%8D%E5%87%BA%E5%8E%82%E8%AE%BE%E7%BD%AE/press",
   
@@ -306,6 +314,19 @@ function renderSwitchState(on) {
   if (span) span.textContent = isOn ? "开" : "关";
 }
 
+function renderMindfulnessState(on) {
+  mindfulnessOn = !!on;
+
+  if (mindfulnessStatus) {
+    mindfulnessStatus.textContent = mindfulnessOn ? "进行中" : "未开启";
+  }
+
+  if (mindfulnessToggleBtn) {
+    mindfulnessToggleBtn.classList.toggle("active", mindfulnessOn);
+    mindfulnessToggleBtn.textContent = mindfulnessOn ? "退出正念" : "进入正念";
+  }
+}
+
 function renderBrightness(value) {
   const num = Math.max(0, Math.min(100, Number(value) || 0));
 
@@ -388,6 +409,11 @@ async function turnLightRemote(on) {
   } else {
     renderBrightness(0);
   }
+}
+
+async function setMindfulnessRemote(on) {
+  await post(on ? API.mindfulnessOn : API.mindfulnessOff);
+  renderMindfulnessState(on);
 }
 
 async function setSceneEnable(sceneNo, on) {
@@ -567,6 +593,113 @@ function handleEventData(data) {
   }
 }
 
+function handleEventDataV2(data) {
+  if (!data || !data.name_id) return;
+
+  if (data.name_id === "switch/MANUAL 1 手动总开关") {
+    renderSwitchState(parseBool(data));
+    return;
+  }
+
+  if (data.name_id === "switch/ZEN 正念模式") {
+    renderMindfulnessState(parseBool(data));
+    return;
+  }
+
+  if (data.name_id === "number/BRT 当前亮度") {
+    renderBrightness(parseNumber(data, 0));
+    return;
+  }
+
+  if (data.name_id === "switch/T1 时段1启用") {
+    renderMiniSwitch(scene1Switch, parseBool(data));
+    return;
+  }
+  if (data.name_id === "switch/T2 时段2启用") {
+    renderMiniSwitch(scene2Switch, parseBool(data));
+    return;
+  }
+  if (data.name_id === "switch/T3 时段3启用") {
+    renderMiniSwitch(scene3Switch, parseBool(data));
+    return;
+  }
+
+  if (data.name_id === "number/T1 BRT") {
+    renderSceneBrightness(scene1BrightnessValue, parseNumber(data, 30));
+    return;
+  }
+  if (data.name_id === "number/T2 BRT") {
+    renderSceneBrightness(scene2BrightnessValue, parseNumber(data, 30));
+    return;
+  }
+  if (data.name_id === "number/T3 BRT") {
+    renderSceneBrightness(scene3BrightnessValue, parseNumber(data, 50));
+    return;
+  }
+
+  if (data.name_id === "number/T1 ON H") {
+    sceneTimeState[1].startH = parseNumber(data, sceneTimeState[1].startH);
+    renderSceneTime(1);
+    return;
+  }
+  if (data.name_id === "number/T1 ON M") {
+    sceneTimeState[1].startM = parseNumber(data, sceneTimeState[1].startM);
+    renderSceneTime(1);
+    return;
+  }
+  if (data.name_id === "number/T1 OFF H") {
+    sceneTimeState[1].endH = parseNumber(data, sceneTimeState[1].endH);
+    renderSceneTime(1);
+    return;
+  }
+  if (data.name_id === "number/T1 OFF M") {
+    sceneTimeState[1].endM = parseNumber(data, sceneTimeState[1].endM);
+    renderSceneTime(1);
+    return;
+  }
+
+  if (data.name_id === "number/T2 ON H") {
+    sceneTimeState[2].startH = parseNumber(data, sceneTimeState[2].startH);
+    renderSceneTime(2);
+    return;
+  }
+  if (data.name_id === "number/T2 ON M") {
+    sceneTimeState[2].startM = parseNumber(data, sceneTimeState[2].startM);
+    renderSceneTime(2);
+    return;
+  }
+  if (data.name_id === "number/T2 OFF H") {
+    sceneTimeState[2].endH = parseNumber(data, sceneTimeState[2].endH);
+    renderSceneTime(2);
+    return;
+  }
+  if (data.name_id === "number/T2 OFF M") {
+    sceneTimeState[2].endM = parseNumber(data, sceneTimeState[2].endM);
+    renderSceneTime(2);
+    return;
+  }
+
+  if (data.name_id === "number/T3 ON H") {
+    sceneTimeState[3].startH = parseNumber(data, sceneTimeState[3].startH);
+    renderSceneTime(3);
+    return;
+  }
+  if (data.name_id === "number/T3 ON M") {
+    sceneTimeState[3].startM = parseNumber(data, sceneTimeState[3].startM);
+    renderSceneTime(3);
+    return;
+  }
+  if (data.name_id === "number/T3 OFF H") {
+    sceneTimeState[3].endH = parseNumber(data, sceneTimeState[3].endH);
+    renderSceneTime(3);
+    return;
+  }
+  if (data.name_id === "number/T3 OFF M") {
+    sceneTimeState[3].endM = parseNumber(data, sceneTimeState[3].endM);
+    renderSceneTime(3);
+  }
+}
+
 if (timeModalClose) {
   timeModalClose.addEventListener("click", closeTimeModal);
 }
@@ -589,6 +722,7 @@ if (timeModal) {
 async function loadInitialState() {
   const requests = [
     API.mainSwitchGet,
+    API.mindfulnessGet,
     API.mainBrightnessGet,
 
     API.scene1EnableGet,
@@ -613,12 +747,13 @@ async function loadInitialState() {
     API.scene3StartMGet,
     API.scene3EndHGet,
     API.scene3EndMGet,
+
   ];
 
   for (const url of requests) {
     try {
       const json = await getJson(url);
-      handleEventData(json);
+      handleEventDataV2(json);
     } catch (err) {
       console.warn("初始化读取失败:", url, err);
     }
@@ -631,7 +766,7 @@ function connectEvents() {
   es.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data);
-      handleEventData(data);
+      handleEventDataV2(data);
     } catch (err) {
       console.warn("事件解析失败:", err, event.data);
     }
@@ -680,6 +815,16 @@ if (mainSwitch) {
       await turnLightRemote(!isOn);
     } catch (err) {
       console.error("切换主开关失败:", err);
+    }
+  });
+}
+
+if (mindfulnessToggleBtn) {
+  mindfulnessToggleBtn.addEventListener("click", async () => {
+    try {
+      await setMindfulnessRemote(!mindfulnessOn);
+    } catch (err) {
+      console.error("切换正念模式失败:", err);
     }
   });
 }
@@ -823,6 +968,21 @@ if (scene3EndBtn) {
 }
 
 //系统层级按钮
+if (rfPairBtn) {
+  rfPairBtn.addEventListener("click", async () => {
+    const ok = confirm("确认重新进入无线遥控对频吗？发送后请立即按一下遥控器按键。");
+    if (!ok) return;
+
+    try {
+      await post(API.rfPair);
+      alert("已进入对频，请立即按一下遥控器按键完成配对。");
+    } catch (err) {
+      console.error("433 对频触发失败:", err);
+      alert("无线遥控对频触发失败，请查看控制台日志。");
+    }
+  });
+}
+
 if (restartBtn) {
   restartBtn.addEventListener("click", async () => {
     const ok = confirm("确定要重启设备吗？");
